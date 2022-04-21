@@ -1,0 +1,112 @@
+#!/usr/bin/env bash
+set -Eeuo pipefail
+
+owd=$(pwd)
+
+deps=(
+  dashing
+  ffmpeg
+  pandoc
+  unzip
+  curl
+  jq
+)
+
+declare -a missing_deps
+
+for d in "${deps[@]}"; do
+  if ! hash "$d" 1>&2 2>/dev/null; then
+    missing_deps+=("$d")
+  fi
+done
+
+if [[ "${#missing_deps[@]}" -ne 0 ]];then
+  echo "The following dependencies are required and need to be installed:" 1>&2
+  for d in "${missing_deps[@]}"; do
+    echo "  - $d" 1>&2
+  done
+  exit 1
+fi
+
+if [[ -d "$owd/carp.docset" ]]; then
+  echo "$owd/carp.docset already exist. Overwrite? (y/N)"
+  read -r -n1 answer
+  echo "" # clear line
+  if ! [[ "$answer" = "y" ]]; then
+    echo "Ok, stopping here." 1>&2
+    exit 1
+  fi
+fi
+
+latest_release_data=$(curl -s -L https://api.github.com/repos/carp-lang/Carp/releases/latest)
+
+release_name=$(echo "$latest_release_data" | jq ".name" -r)
+release_url=$(echo "$latest_release_data" | jq ".assets[0].browser_download_url" -r)
+release_file_name=$(echo "$latest_release_data" | jq ".assets[0].name" -r)
+
+echo "Using $release_name to generate docset..."
+
+wrkdir=$(mktemp -d)
+
+trap cleanup SIGINT SIGTERM ERR EXIT
+cleanup() {
+  trap - SIGINT SIGTERM ERR EXIT
+  [[ -n "$wrkdir" ]] && rm -rf "$wrkdir"
+}
+
+cd "$wrkdir"
+
+if [[ -z "$release_url" ]]; then
+  echo "Could not find latest release zip to download"
+  exit 1
+fi
+
+curl "$release_url" -L -o release.zip
+unzip release.zip
+
+cd "${release_file_name%.*}/docs"
+mkdir guides
+
+for g in *.md; do
+  echo "$g"
+  filename="${g%.*}"
+  pandoc -s "$g" -o "guides/${filename}.html"
+done
+
+(cat << 'CONFIG'
+{
+    "name": "Carp",
+    "package": "carp",
+    "index": "./core/core_index.html",
+    "selectors": {
+        "h1": [
+          {
+            "type": "Module",
+            "matchpath": "^core/.*\\.html"
+          },
+          {
+            "type": "Guide",
+            "matchpath": "^guides/.*\\.html"
+          }
+        ],
+        ".binder .anchor h3": [{
+          "type": "Binding",
+          "attr": "id"
+        }]
+    },
+    "icon32x32": "./core/logo32.png",
+    "allowJS": false,
+    "ExternalURL": "https://carp-lang.github.io/carp-docs"
+}
+CONFIG
+) > dashing.json
+
+ffmpeg -i core/logo.png -vf scale=-1:32 core/logo32.png
+
+dashing build
+
+rm -rf "$owd/carp.docset"
+cp -r carp.docset "$owd"
+
+echo "carp.docset has been created"
+
