@@ -12,7 +12,7 @@ deps=(
   jq
 )
 
-declare -a missing_deps
+missing_deps=()
 
 for d in "${deps[@]}"; do
   if ! hash "$d" 1>&2 2>/dev/null; then
@@ -67,10 +67,18 @@ unzip release.zip
 cd "${release_file_name%.*}/docs"
 mkdir guides
 
+(cat << 'LUA'
+function Link(el)
+  el.target = string.gsub(el.target, "%.md", ".html")
+  return el
+end
+LUA
+) > md-links-to-html.lua
+
 for g in *.md; do
   echo "$g"
   filename="${g%.*}"
-  pandoc -s "$g" -o "guides/${filename}.html"
+  pandoc -s "$g" -o "${filename}.html" --lua-filter=md-links-to-html.lua
 done
 
 (cat << 'CONFIG'
@@ -86,7 +94,7 @@ done
           },
           {
             "type": "Guide",
-            "matchpath": "^guides/.*\\.html"
+            "matchpath": "^[^(core/)].*\\.html"
           }
         ],
         ".binder .anchor h3": [{
@@ -108,5 +116,5 @@ dashing build
 rm -rf "$owd/carp.docset"
 cp -r carp.docset "$owd"
 
-echo "carp.docset has been created"
+echo "carp.docset has been created for $release_name"
 
